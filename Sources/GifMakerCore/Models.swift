@@ -191,7 +191,8 @@ public struct Recording: Identifiable, Codable, Hashable, Sendable {
         scale: Double
     ) {
         self.id = id
-        self.createdAt = createdAt
+        // Whole seconds, so the value survives being saved as an ISO 8601 date unchanged.
+        self.createdAt = Date(timeIntervalSince1970: createdAt.timeIntervalSince1970.rounded(.down))
         self.duration = duration
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight

@@ -15,10 +15,12 @@ public enum Exporter {
     /// - Parameters:
     ///   - destination: Where to write the file. Pass `nil` to only measure how
     ///     big the result would be.
+    ///   - gifOptions: Encoder tuning; only used for GIF output.
     ///   - progress: Called with 0...1 as frames are produced (on the exporting thread).
     ///   - isCancelled: Polled once per frame; return `true` to stop.
     public static func export(
         source: URL, settings: EditSettings, format: ExportFormat, destination: URL?,
+        gifOptions: GIFEncoder.Options = GIFEncoder.Options(),
         progress: (@Sendable (Double) -> Void)? = nil,
         isCancelled: (@Sendable () -> Bool)? = nil
     ) async throws -> ExportOutcome {
@@ -31,7 +33,8 @@ public enum Exporter {
         let sink: FrameSink
         switch format {
         case .gif:
-            sink = try GIFFrameSink(destination: destination, width: plan.outputWidth, height: plan.outputHeight)
+            sink = try GIFFrameSink(
+                destination: destination, width: plan.outputWidth, height: plan.outputHeight, options: gifOptions)
         case .mp4:
             sink = try MP4FrameSink(
                 destination: destination, width: plan.outputWidth, height: plan.outputHeight,
@@ -131,10 +134,10 @@ private final class GIFFrameSink: FrameSink {
     private let encoder: GIFEncoder
     private let destination: URL?
 
-    init(destination: URL?, width: Int, height: Int) throws {
+    init(destination: URL?, width: Int, height: Int, options: GIFEncoder.Options) throws {
         self.destination = destination
         let sink: GIFByteSink = try destination.map { try FileByteSink(url: $0) } ?? CountingByteSink()
-        encoder = try GIFEncoder(sink: sink, width: width, height: height)
+        encoder = try GIFEncoder(sink: sink, width: width, height: height, options: options)
     }
 
     func append(_ pixels: UnsafePointer<UInt32>, duration: Double) throws {

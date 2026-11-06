@@ -45,7 +45,7 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
     static let border: CGFloat = 5
     static let barHeight: CGFloat = 40
     static let stripHeight: CGFloat = 84
-    static let minimumGlassSize = CGSize(width: 120, height: 60)
+    static let minimumGlassSize = CGSize(width: 130, height: 60)
     static let defaultGlassSize = CGSize(width: 640, height: 400)
 
     let panel = CapturePanel()
@@ -193,6 +193,18 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
 
     var isVisible: Bool { panel.isVisible }
 
+    /// The capture window normally floats above everything so it can frame other
+    /// apps. While one of this app's own windows (an editor, Settings) is in
+    /// front, it drops behind that window instead of covering it.
+    func yield(to window: NSWindow?) {
+        guard let window, window !== panel, window.isVisible else {
+            if panel.level != .floating { panel.level = .floating }
+            return
+        }
+        panel.level = .normal
+        if panel.isVisible { panel.order(.below, relativeTo: window.windowNumber) }
+    }
+
     // MARK: Moving and resizing
 
     var isLocked: Bool { capture.state != .idle }
@@ -279,6 +291,11 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
     // MARK: Gear menu
 
     private func showGearMenu(from button: NSView) {
+        // Drop down from just under the button (the view isn't flipped, so below is negative).
+        makeGearMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: -6), in: button)
+    }
+
+    func makeGearMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -310,8 +327,7 @@ final class CaptureWindowController: NSObject, NSWindowDelegate {
         add("Hide Capture Window", enabled: idle) { [weak self] in self?.hide() }
         menu.addItem(.separator())
         add("Quit GIF Maker") { NSApp.terminate(nil) }
-
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 6), in: button)
+        return menu
     }
 
     func confirmClearCaptures() {

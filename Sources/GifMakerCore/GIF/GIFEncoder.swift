@@ -60,11 +60,19 @@ public final class GIFEncoder {
         /// A pixel is re-encoded only when a channel moved by more than this
         /// since the pixel was last drawn. Hides video-compression shimmer in
         /// static areas; 0 re-encodes on any change at all.
-        public var changeThreshold: Int = 2
+        public var changeThreshold: Int
+        /// Video compression takes a few frames to settle after something moves,
+        /// so a freshly drawn pixel may be slightly off. This many frames after a
+        /// pixel was drawn it is checked once more and redrawn if the source has
+        /// settled on a different value. 0 disables the check.
+        public var settleFrames: Int
 
-        public init(loopCount: Int = 0, changeThreshold: Int = 2) {
+        /// The defaults were tuned on real screen recordings: together they keep
+        /// flat backgrounds clean behind moving content without growing the file.
+        public init(loopCount: Int = 0, changeThreshold: Int = 3, settleFrames: Int = 4) {
             self.loopCount = loopCount
             self.changeThreshold = changeThreshold
+            self.settleFrames = settleFrames
         }
     }
 
@@ -79,6 +87,11 @@ public final class GIFEncoder {
 
     /// True colour of each pixel at the moment it was last encoded.
     private let reference: UnsafeMutablePointer<UInt32>
+    /// Frames since each pixel was last drawn because of a real change, counting
+    /// up to `settleFrames`; `settled` once its one follow-up check is done.
+    private let age: UnsafeMutablePointer<UInt8>
+    private static let settled: UInt8 = 255
+    private static let settleTolerance: Int32 = 1
     private let changed: UnsafeMutablePointer<UInt8>
     private let indices: UnsafeMutablePointer<UInt8>
 
@@ -104,9 +117,11 @@ public final class GIFEncoder {
 
         let pixelCount = width * height
         reference = .allocate(capacity: pixelCount)
+        age = .allocate(capacity: pixelCount)
         changed = .allocate(capacity: pixelCount)
         indices = .allocate(capacity: pixelCount)
         reference.initialize(repeating: 0, count: pixelCount)
+        age.initialize(repeating: 0, count: pixelCount)
         changed.initialize(repeating: 0, count: pixelCount)
         indices.initialize(repeating: 0, count: pixelCount)
 
@@ -127,6 +142,7 @@ public final class GIFEncoder {
 
     deinit {
         reference.deallocate()
+        age.deallocate()
         changed.deallocate()
         indices.deallocate()
     }
@@ -138,6 +154,7 @@ public final class GIFEncoder {
     public func addFrame(_ pixels: UnsafePointer<UInt32>, duration: Double) throws {
         precondition(!finished, "encoder already finished")
         let threshold = Int32(options.changeThreshold)
+        let settleFrames = UInt8(clamping: min(options.settleFrames, 254))
         let isFirst = !hasFirstFrame
 
         var minX = width, minY = height, maxX = -1, maxY = -1
@@ -159,15 +176,24 @@ public final class GIFEncoder {
                 for x in 0..<width {
                     let pixel = pixels[i] & 0x00FF_FFFF
                     let old = reference[i]
-                    var isChanged = false
+                    // Largest move of any channel since this pixel was last drawn.
+                    var delta: Int32 = 0
                     if pixel != old {
-                        if threshold == 0 {
-                            isChanged = true
-                        } else {
-                            let db = abs(Int32(pixel & 0xFF) - Int32(old & 0xFF))
-                            let dg = abs(Int32((pixel >> 8) & 0xFF) - Int32((old >> 8) & 0xFF))
-                            let dr = abs(Int32((pixel >> 16) & 0xFF) - Int32((old >> 16) & 0xFF))
-                            isChanged = db > threshold || dg > threshold || dr > threshold
+                        let db = abs(Int32(pixel & 0xFF) - Int32(old & 0xFF))
+                        let dg = abs(Int32((pixel >> 8) & 0xFF) - Int32((old >> 8) & 0xFF))
+                        let dr = abs(Int32((pixel >> 16) & 0xFF) - Int32((old >> 16) & 0xFF))
+                        delta = max(db, dg, dr)
+                    }
+                    var isChanged = delta > threshold
+                    if isChanged {
+                        age[i] = 0
+                    } else if age[i] < settleFrames {
+                        age[i] += 1
+                        if age[i] == settleFrames {
+                            // One follow-up look: redraw if the source settled somewhere
+                            // visibly different (a single level isn't worth the bytes).
+                            age[i] = Self.settled
+                            isChanged = delta > Self.settleTolerance
                         }
                     }
                     if isChanged {

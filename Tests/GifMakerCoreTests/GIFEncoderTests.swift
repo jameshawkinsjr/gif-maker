@@ -199,6 +199,39 @@ final class GIFEncoderTests: XCTestCase {
         XCTAssertEqual(decoded.delays[0], 0.3, accuracy: 0.0001)
     }
 
+    /// Video compression needs a few frames to settle after a change, so what
+    /// was drawn first can be slightly off from where the source ends up.
+    func testPixelsAreRedrawnOnceAfterTheSourceSettles() throws {
+        let (w, h) = (40, 30)
+        let rough = [UInt32](repeating: Self.pack(100, 100, 100), count: w * h)
+        let settled = [UInt32](repeating: Self.pack(102, 101, 100), count: w * h)
+        let frames = [rough] + Array(repeating: settled, count: 9)
+        let decoded = try Self.decode(
+            try Self.encode(
+                width: w, height: h, frames: frames, duration: 0.1,
+                options: .init(changeThreshold: 2, settleFrames: 4)))
+
+        XCTAssertEqual(decoded.frames.count, 2, "one redraw once the source has settled, and no more")
+        XCTAssertEqual(decoded.delays[0], 0.4, accuracy: 0.0001)
+        XCTAssertEqual(decoded.delays[1], 0.6, accuracy: 0.0001)
+        XCTAssertEqual(Self.maxChannelDifference(decoded.frames[1], settled), 0)
+    }
+
+    /// Once a pixel has had its follow-up check, later shimmer is ignored again.
+    func testLongSettledPixelsIgnoreLaterShimmer() throws {
+        let (w, h) = (40, 30)
+        let base = [UInt32](repeating: Self.pack(100, 100, 100), count: w * h)
+        let shimmer = [UInt32](repeating: Self.pack(102, 101, 100), count: w * h)
+        let frames = Array(repeating: base, count: 8) + Array(repeating: shimmer, count: 8)
+        let decoded = try Self.decode(
+            try Self.encode(
+                width: w, height: h, frames: frames, duration: 0.1,
+                options: .init(changeThreshold: 2, settleFrames: 4)))
+
+        XCTAssertEqual(decoded.frames.count, 1)
+        XCTAssertEqual(decoded.delays[0], 1.6, accuracy: 0.0001)
+    }
+
     /// Noise defeats LZW's dictionary, forcing many dictionary resets and every code width.
     func testNoiseSurvivesLZWDictionaryResets() throws {
         let (w, h) = (300, 300)

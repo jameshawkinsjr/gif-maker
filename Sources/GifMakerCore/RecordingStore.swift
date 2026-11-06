@@ -51,7 +51,25 @@ public final class RecordingStore: ObservableObject {
             loaded.append(recording)
         }
         recordings = loaded.sorted { $0.createdAt > $1.createdAt }
+
+        // A recording that never finished (a crash, say) leaves a movie with no
+        // metadata beside it. Nothing can open those, so clear them out. Movies
+        // whose metadata exists but couldn't be read are left alone, and so is
+        // anything recent enough that it might still be being written.
+        let cutoff = Date().addingTimeInterval(-Self.orphanGracePeriod)
+        for file in files where file.pathExtension == "mov" {
+            let metadata = file.deletingPathExtension().appendingPathExtension("json")
+            guard !FileManager.default.fileExists(atPath: metadata.path),
+                let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate,
+                modified < cutoff
+            else { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
     }
+
+    /// How old a movie without metadata must be before it's treated as abandoned.
+    static let orphanGracePeriod: TimeInterval = 600
 
     private func save(_ recording: Recording) {
         let encoder = JSONEncoder()

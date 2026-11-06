@@ -250,11 +250,19 @@ public final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @
         guard let stream else { throw ScreenRecorderError.notRecording }
         self.stream = nil
         try? await stream.stopCapture()
-        return try await withCheckedThrowingContinuation { continuation in
+        let written: Result = try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 self.finish { continuation.resume(with: $0) }
             }
         }
+        // Report the length the finished file really has; the container rounds
+        // timestamps, so it can differ slightly from what was requested.
+        guard let duration = try? await AVURLAsset(url: written.url).load(.duration).seconds, duration > 0 else {
+            return written
+        }
+        return Result(
+            url: written.url, duration: duration, pixelWidth: written.pixelWidth, pixelHeight: written.pixelHeight,
+            frameCount: written.frameCount)
     }
 
     // MARK: Stream callbacks
