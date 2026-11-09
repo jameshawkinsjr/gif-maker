@@ -6,11 +6,11 @@
 #   scripts/build-app.sh --install    build, then copy it to /Applications
 #   scripts/build-app.sh --open       build, then launch it
 #
-# Environment:
+# Environment (see scripts/common.sh):
 #   CODESIGN_IDENTITY   Signing identity to use. Defaults to the first
-#                       "Apple Development" or "Developer ID Application"
-#                       certificate in your keychain, or ad-hoc ("-") if there
-#                       is none.
+#                       "Developer ID Application" certificate in your keychain,
+#                       then the first "Apple Development" one, or ad-hoc ("-")
+#                       if there is neither.
 #   BUNDLE_ID           Bundle identifier (default: app.gifmaker.GifMaker).
 #   VERSION             Version string (default: 1.0.0).
 #
@@ -21,12 +21,9 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/common.sh
 
-APP_NAME="GIF Maker"
-BUNDLE_ID="${BUNDLE_ID:-app.gifmaker.GifMaker}"
-VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
-BUILD_DIR="build"
 APP="$BUILD_DIR/$APP_NAME.app"
 
 INSTALL=0
@@ -64,14 +61,17 @@ swift scripts/make-icon.swift "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 
-IDENTITY="${CODESIGN_IDENTITY:-}"
-if [ -z "$IDENTITY" ]; then
-    IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null |
-        awk -F'"' '/Apple Development|Developer ID Application/ { print $2; exit }')"
-fi
-if [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ]; then
+IDENTITY="$(signing_identity)"
+if [ "$IDENTITY" != "-" ]; then
     echo "==> Signing with a certificate from your keychain"
-    if ! codesign --force --sign "$IDENTITY" "$APP"; then
+    # The hardened runtime and a secure timestamp are both required for
+    # notarization. The timestamp needs network access, so it's only requested
+    # for Developer ID signing, where it matters.
+    SIGN_FLAGS=(--options runtime)
+    if is_developer_id "$IDENTITY"; then
+        SIGN_FLAGS+=(--timestamp)
+    fi
+    if ! codesign --force --sign "$IDENTITY" "${SIGN_FLAGS[@]}" "$APP"; then
         echo "    Certificate signing failed; falling back to an ad-hoc signature." >&2
         codesign --force --sign - "$APP"
     fi
