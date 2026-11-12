@@ -45,12 +45,15 @@ done
 
 echo "==> Compiling (release)"
 swift build -c release
-BINARY="$(swift build -c release --show-bin-path)/GifMaker"
+BIN_DIR="$(swift build -c release --show-bin-path)"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BINARY" "$APP/Contents/MacOS/GifMaker"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
+cp "$BIN_DIR/GifMaker" "$APP/Contents/MacOS/GifMaker"
+# The MCP server for AI agents (see the README). Helpers is the conventional
+# home for extra command-line tools inside a bundle.
+cp "$BIN_DIR/gifmaker-mcp" "$APP/Contents/Helpers/gifmaker-mcp"
 sed -e "s/__BUNDLE_ID__/$BUNDLE_ID/" -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUMBER/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 
@@ -62,6 +65,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
 
 IDENTITY="$(signing_identity)"
+SIGN_FLAGS=()
 if [ "$IDENTITY" != "-" ]; then
     echo "==> Signing with a certificate from your keychain"
     # The hardened runtime and a secure timestamp are both required for
@@ -71,14 +75,18 @@ if [ "$IDENTITY" != "-" ]; then
     if is_developer_id "$IDENTITY"; then
         SIGN_FLAGS+=(--timestamp)
     fi
-    if ! codesign --force --sign "$IDENTITY" "${SIGN_FLAGS[@]}" "$APP"; then
-        echo "    Certificate signing failed; falling back to an ad-hoc signature." >&2
-        codesign --force --sign - "$APP"
-    fi
 else
     echo "==> Signing ad-hoc (no signing certificate found)"
-    codesign --force --sign - "$APP"
 fi
+# Nested code has to be signed before the bundle that contains it.
+sign() {
+    if ! codesign --force --sign "$IDENTITY" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} "$1"; then
+        echo "    Certificate signing failed; falling back to an ad-hoc signature." >&2
+        codesign --force --sign - "$1"
+    fi
+}
+sign "$APP/Contents/Helpers/gifmaker-mcp"
+sign "$APP"
 codesign --verify --strict "$APP"
 
 echo "==> Built $APP"

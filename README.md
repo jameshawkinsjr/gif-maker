@@ -61,9 +61,34 @@ macOS ties the Screen Recording permission to the app's code signature. The buil
 
 The gear button holds the capture options (cursor, click highlights, exact size) and Settings, where you can change the shortcut and the recording limit.
 
+## Use it from an AI agent (MCP)
+
+GIF Maker includes a [Model Context Protocol](https://modelcontextprotocol.io) server, so an AI agent such as Claude Code can record the screen and make GIFs on its own — for example to show how an app works, while it drives the app with its other tools. It uses the same recorder and encoder as the app, and GIF Maker doesn't need to be open.
+
+The server is inside the app bundle. To add it to Claude Code:
+
+```sh
+claude mcp add --scope user gif-maker -- "/Applications/GIF Maker.app/Contents/Helpers/gifmaker-mcp"
+```
+
+Other MCP clients take the same path as a `stdio` server command, with no arguments.
+
+| Tool | What it does |
+| --- | --- |
+| `list_windows` | Lists displays and on-screen windows with their ids and bounds. |
+| `start_recording` | Records an app's window, a window by id, a screen region or a whole display. Runs until `stop_recording`, or for a fixed `duration_seconds`. |
+| `stop_recording` | Stops and returns the path of the recorded movie. |
+| `make_gif` | Turns a movie into a GIF or MP4: trim, width, frame rate, speed, loop style and captions. |
+| `preview` | Returns evenly spaced frames of a GIF or movie as one image, so the agent can check its work. |
+| `get_status` | Reports Screen Recording permission and whether a recording is running. |
+
+A window is recorded as the area of the screen it covers, so menus and popovers that open over it are included. Recordings go to `~/Library/Caches/GIF Maker/Agent Recordings`; GIFs are written wherever the agent asks.
+
+**Permission:** macOS gives Screen Recording permission to the app that starts the server — your terminal, editor or Claude app — not to GIF Maker. If it's missing, the tools say so; turn that app on under *System Settings → Privacy & Security → Screen & System Audio Recording* and restart it.
+
 ## How it works
 
-The code is a Swift package with two targets:
+The code is a Swift package with three targets:
 
 - **`GifMakerCore`** — everything that doesn't need a window.
   - `ScreenRecorder` captures a display region with ScreenCaptureKit and writes it to an H.264 movie. The app's own windows are excluded from the capture.
@@ -71,6 +96,7 @@ The code is a Swift package with two targets:
   - `Exporter` decodes those frames, scales them, draws captions, and feeds a GIF or MP4 writer. Reverse and ping-pong loops are decoded in chunks so memory stays bounded.
   - `GIFEncoder` is a streaming GIF encoder written for screen recordings: each frame gets its own palette, and only pixels that changed since the previous frame are stored.
 - **`GifMaker`** — the AppKit/SwiftUI app: the capture window, editor, settings, menus and global shortcut.
+- **`GifMakerMCP`** — the `gifmaker-mcp` server described above, built on `GifMakerCore`.
 
 Recordings and their edit settings are stored in `~/Library/Application Support/GIF Maker/Captures`.
 
