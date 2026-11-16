@@ -165,7 +165,22 @@
                 app.captureWindow.barView.onSize?()
                 replyState()
             case "settings":
-                app.showSettings()
+                // settings [updates]
+                app.showSettings(pane: arguments.first == "updates" ? .updates : .general)
+            case "updates":
+                replyUpdates()
+            case "update-folder":
+                // update-folder <path>; no path clears it. Setting it starts a check.
+                let path = line.dropFirst("update-folder".count).trimmingCharacters(in: .whitespaces)
+                app.preferences.updateFolder = path.isEmpty ? nil : URL(fileURLWithPath: path, isDirectory: true)
+                replyUpdates()
+            case "update-check":
+                app.updates.checkNow()
+                replyUpdates()
+            case "update-install":
+                // Installs the available update and restarts, as the button in Settings does.
+                app.updates.installUpdate()
+                replyUpdates()
             case "appearance":
                 switch arguments.first {
                 case "light": NSApp.appearance = NSAppearance(named: .aqua)
@@ -217,6 +232,20 @@
                 ]
             }
             reply("windows", ["windows": windows, "active": NSApp.isActive])
+        }
+
+        private func replyUpdates() {
+            let updates = app.updates
+            reply(
+                "updates",
+                [
+                    "version": updates.currentVersion?.description ?? "none",
+                    "folder": app.preferences.updateFolder?.path ?? "",
+                    "status": "\(updates.status)",
+                    "available": updates.availableUpdate?.version.description ?? "",
+                    "lastOutcome": updates.lastOutcome.map { "\($0)" } ?? "",
+                    "adHoc": updates.isAdHocSigned,
+                ])
         }
 
         /// Reports which window the system would deliver a click at `point` to.

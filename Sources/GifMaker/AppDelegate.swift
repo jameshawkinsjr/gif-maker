@@ -8,10 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let preferences = Preferences.shared
     let store: RecordingStore
     let capture: CaptureController
+    let updates: UpdateController
     private(set) var captureWindow: CaptureWindowController!
     private(set) var editors: [UUID: EditorWindowController] = [:]
 
     private var settingsWindow: NSWindow?
+    private let settingsNavigation = SettingsNavigation()
     private let hotKey = GlobalHotKey()
     /// Whether the system accepted the current record shortcut.
     private(set) var isHotKeyRegistered = false
@@ -34,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         #endif
         store = RecordingStore(directory: directory)
         capture = CaptureController(store: store, preferences: preferences)
+        updates = UpdateController(preferences: preferences)
         super.init()
     }
 
@@ -88,6 +91,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         captureWindow.show()
         NSApp.activate(ignoringOtherApps: true)
+
+        // An update restarts the app, so it waits for anything that would be lost.
+        updates.installBlocker = { [weak self] in
+            guard let self else { return nil }
+            if self.capture.state != .idle { return "Finish the recording first, then install the update." }
+            if self.editors.values.contains(where: { $0.model.isExporting }) {
+                return "Wait for the export to finish, then install the update."
+            }
+            return nil
+        }
+        updates.start()
+        if updates.lastOutcome == .updated(signatureChanged: true), !ScreenRecorder.hasPermission {
+            // Once the launch has settled, and from the run loop rather than the
+            // main queue, which a modal alert would otherwise hold up.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated { ScreenRecordingPermission.showAlertAfterUpdate() }
+            }
+        }
 
         #if DEBUG
             automation = Automation.startIfRequested(app: self)
@@ -148,7 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controller.show()
     }
 
-    func showSettings() {
+    func showSettings(pane: SettingsNavigation.Pane? = nil) {
+        if let pane { settingsNavigation.pane = pane }
         if settingsWindow == nil {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 460, height: 420), styleMask: [.titled, .closable],
@@ -157,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.isReleasedWhenClosed = false
             window.contentViewController = NSHostingController(
                 rootView: SettingsView(
-                    preferences: preferences, store: store,
+                    preferences: preferences, store: store, updates: updates, navigation: settingsNavigation,
                     onClearCaptures: { [weak self] in self?.captureWindow.confirmClearCaptures() }))
             window.center()
             settingsWindow = window
@@ -199,6 +221,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appMenu.addItem(
             withTitle: "About GIF Maker", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: "")
+        appMenu.addItem(
+            ClosureMenuItem(title: "Check for Updates…") { [weak self] in
+                self?.showSettings(pane: .updates)
+                self?.updates.checkNow()
+            })
         appMenu.addItem(.separator())
         appMenu.addItem(ClosureMenuItem(title: "Settings…", keyEquivalent: ",") { [weak self] in self?.showSettings() })
         appMenu.addItem(.separator())
@@ -298,6 +325,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             menu.addItem(ClosureMenuItem(title: "Show Capture Window") { [weak self] in self?.captureWindow.show() })
             menu.addItem(.separator())
+            if let update = updates.availableUpdate {
+                // Installing is a click away in Settings; nothing interrupts to offer it.
+                menu.addItem(
+                    ClosureMenuItem(title: "Update Available (\(update.version.version))…") { [weak self] in
+                        self?.showSettings(pane: .updates)
+                    })
+            }
             menu.addItem(ClosureMenuItem(title: "Settings…") { [weak self] in self?.showSettings() })
             menu.addItem(ClosureMenuItem(title: "Quit GIF Maker") { NSApp.terminate(nil) })
         }
