@@ -103,7 +103,7 @@ public struct UpdateInstallPlan: Equatable, Sendable {
         # The path is handed to awk through the environment so that this pipeline
         # can't match its own command line.
         is_running() {
-            ps -axo args= | UPDATE_TARGET="$installed/$executable" UPDATE_TARGET_PHYSICAL="$physical/$executable" \
+            ps -axwwo args= | UPDATE_TARGET="$installed/$executable" UPDATE_TARGET_PHYSICAL="$physical/$executable" \
                 awk 'index($0, ENVIRON["UPDATE_TARGET"]) == 1 || index($0, ENVIRON["UPDATE_TARGET_PHYSICAL"]) == 1 { found = 1 }
                      END { exit !found }'
         }
