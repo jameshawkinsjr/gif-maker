@@ -19,6 +19,10 @@ final class Preferences: ObservableObject {
         static let hotKeyCleared = "recordHotKeyCleared"
         static let captureArea = "captureArea"
         static let showsCaptures = "showsCaptures"
+        static let updateFolder = "updateFolder"
+        static let automaticallyChecksForUpdates = "automaticallyChecksForUpdates"
+        static let lastUpdateCheck = "lastUpdateCheck"
+        static let lastUpdateCheckWasUpToDate = "lastUpdateCheckWasUpToDate"
     }
 
     /// Include the mouse pointer in recordings.
@@ -45,6 +49,38 @@ final class Preferences: ObservableObject {
     /// Whether the strip of captured clips is shown under the capture window.
     @Published var showsCaptures: Bool { didSet { defaults.set(showsCaptures, forKey: Key.showsCaptures) } }
 
+    /// The folder new builds are published to, where the app looks for updates.
+    /// It is a plain path: the app isn't sandboxed, so it needs no bookmark.
+    @Published var updateFolder: URL? {
+        didSet {
+            if let updateFolder {
+                defaults.set(updateFolder.path, forKey: Key.updateFolder)
+            } else {
+                defaults.removeObject(forKey: Key.updateFolder)
+            }
+        }
+    }
+    /// Look for updates in the background, not only when asked.
+    @Published var automaticallyChecksForUpdates: Bool {
+        didSet { defaults.set(automaticallyChecksForUpdates, forKey: Key.automaticallyChecksForUpdates) }
+    }
+    /// When the update folder was last read.
+    @Published var lastUpdateCheck: Date? {
+        didSet {
+            if let lastUpdateCheck {
+                defaults.set(lastUpdateCheck, forKey: Key.lastUpdateCheck)
+            } else {
+                defaults.removeObject(forKey: Key.lastUpdateCheck)
+            }
+        }
+    }
+    /// Whether that check found the app up to date. Anything else (an update,
+    /// a folder that was missing or still syncing) is worth looking at again soon.
+    var lastUpdateCheckWasUpToDate: Bool {
+        get { defaults.bool(forKey: Key.lastUpdateCheckWasUpToDate) }
+        set { defaults.set(newValue, forKey: Key.lastUpdateCheckWasUpToDate) }
+    }
+
     /// The last position of the capture area, in screen coordinates.
     var captureArea: CGRect? {
         get {
@@ -68,12 +104,16 @@ final class Preferences: ObservableObject {
             Key.openEditorAfterRecording: true,
             Key.maximumDuration: 30.0,
             Key.showsCaptures: true,
+            Key.automaticallyChecksForUpdates: true,
         ])
         captureCursor = defaults.bool(forKey: Key.captureCursor)
         highlightClicks = defaults.bool(forKey: Key.highlightClicks)
         openEditorAfterRecording = defaults.bool(forKey: Key.openEditorAfterRecording)
         maximumDuration = defaults.double(forKey: Key.maximumDuration)
         showsCaptures = defaults.bool(forKey: Key.showsCaptures)
+        updateFolder = defaults.string(forKey: Key.updateFolder).map { URL(fileURLWithPath: $0, isDirectory: true) }
+        automaticallyChecksForUpdates = defaults.bool(forKey: Key.automaticallyChecksForUpdates)
+        lastUpdateCheck = defaults.object(forKey: Key.lastUpdateCheck) as? Date
         if let data = defaults.data(forKey: Key.hotKey), let combo = try? JSONDecoder().decode(KeyCombo.self, from: data) {
             hotKey = combo
         } else if defaults.bool(forKey: Key.hotKeyCleared) {

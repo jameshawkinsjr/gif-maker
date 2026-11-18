@@ -12,10 +12,22 @@
 #                       is notarized and stapled so it opens on other Macs
 #                       without a Gatekeeper warning. Create the profile once
 #                       with `xcrun notarytool store-credentials`.
+#   PUBLISH_DIR         A folder to publish the image to for the app's built-in
+#                       updater. When set, the image is copied there and a
+#                       latest.json describing it (version, build, file name,
+#                       sha256, size) is written beside it. Point the app at
+#                       the same folder under Settings > Updates. The folder
+#                       must already exist.
+#   RELEASE_NOTES       Optional text for latest.json, shown in Settings beside
+#                       the update.
 #
 # Without a Developer ID certificate the image is still signed, but macOS will
 # warn people who download it that it can't be verified; they can allow it
 # under System Settings > Privacy & Security.
+#
+# The updater installs whatever latest.json points to once its checksum and
+# code signature check out. It can't tell who made a build, so anyone who can
+# write to PUBLISH_DIR can ship code to every copy of the app that reads it.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +50,7 @@ APPLICATIONS_Y=150
 if [ "$#" -gt 0 ]; then
     case "$1" in
         -h | --help)
-            sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -46,6 +58,11 @@ if [ "$#" -gt 0 ]; then
             exit 64
             ;;
     esac
+fi
+
+if [ -n "${PUBLISH_DIR:-}" ] && [ ! -d "$PUBLISH_DIR" ]; then
+    echo "PUBLISH_DIR is not a folder: $PUBLISH_DIR" >&2
+    exit 1
 fi
 
 if [ -d "$MOUNT_POINT" ]; then
@@ -166,6 +183,45 @@ else
     echo "    A Developer ID certificate plus NOTARY_PROFILE removes the warning." >&2
 fi
 
+SHA256="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+
 echo "==> Built $DMG"
 du -h "$DMG" | cut -f1 | sed 's/^/    size: /'
-shasum -a 256 "$DMG" | cut -d' ' -f1 | sed 's/^/    sha256: /'
+echo "    sha256: $SHA256"
+
+if [ -n "${PUBLISH_DIR:-}" ]; then
+    echo "==> Publishing to the update folder"
+    DMG_NAME="$(basename "$DMG")"
+    # The version and build come from the app that was just built, since the
+    # updater compares the manifest with what it finds inside the image.
+    INFO_PLIST="$APP/Contents/Info.plist"
+    PUBLISHED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+    PUBLISHED_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
+
+    # plutil does the JSON quoting, by way of a property list.
+    MANIFEST_PLIST="$BUILD_DIR/latest.plist"
+    MANIFEST="$BUILD_DIR/latest.json"
+    rm -f "$MANIFEST_PLIST" "$MANIFEST"
+    plutil -create xml1 "$MANIFEST_PLIST"
+    plutil -insert version -string "$PUBLISHED_VERSION" "$MANIFEST_PLIST"
+    plutil -insert build -integer "$PUBLISHED_BUILD" "$MANIFEST_PLIST"
+    plutil -insert file -string "$DMG_NAME" "$MANIFEST_PLIST"
+    plutil -insert sha256 -string "$SHA256" "$MANIFEST_PLIST"
+    plutil -insert size -integer "$(stat -f %z "$DMG")" "$MANIFEST_PLIST"
+    if [ -n "${RELEASE_NOTES:-}" ]; then
+        plutil -insert notes -string "$RELEASE_NOTES" "$MANIFEST_PLIST"
+    fi
+    plutil -convert json -r -o "$MANIFEST" "$MANIFEST_PLIST"
+    rm -f "$MANIFEST_PLIST"
+
+    # The image goes first and the manifest last, each copied under a temporary
+    # name and then renamed, so the folder never advertises a file that isn't
+    # there or is only half written. (A sync service can still deliver them out
+    # of order, which is why the app also checks the size and checksum.)
+    cp "$DMG" "$PUBLISH_DIR/$DMG_NAME.part"
+    mv -f "$PUBLISH_DIR/$DMG_NAME.part" "$PUBLISH_DIR/$DMG_NAME"
+    cp "$MANIFEST" "$PUBLISH_DIR/latest.json.part"
+    mv -f "$PUBLISH_DIR/latest.json.part" "$PUBLISH_DIR/latest.json"
+    rm -f "$MANIFEST"
+    echo "    published version $PUBLISHED_VERSION (build $PUBLISHED_BUILD)"
+fi

@@ -2,72 +2,251 @@ import AppKit
 import GifMakerCore
 import SwiftUI
 
+/// Which pane of the settings window is showing.
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    enum Pane: Hashable {
+        case general
+        case updates
+    }
+
+    @Published var pane: Pane = .general
+}
+
 struct SettingsView: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var store: RecordingStore
+    @ObservedObject var updates: UpdateController
+    @ObservedObject var navigation: SettingsNavigation
     let onClearCaptures: () -> Void
 
     @State private var hasPermission = ScreenRecorder.hasPermission
 
     var body: some View {
-        Form {
-            Section("Recording") {
-                LabeledContent("Record shortcut") {
-                    ShortcutRecorder(combo: $preferences.hotKey)
-                        .frame(width: 170, height: 24)
-                }
-                Text("Starts and stops recording from any app.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker("Stop automatically after", selection: $preferences.maximumDuration) {
-                    ForEach(Preferences.maximumDurationChoices, id: \.self) { seconds in
-                        Text(seconds < 60 ? "\(Int(seconds)) seconds" : "\(Int(seconds / 60)) min").tag(seconds)
-                    }
-                }
-                Toggle("Capture cursor", isOn: $preferences.captureCursor)
-                Toggle("Highlight mouse clicks", isOn: $preferences.highlightClicks)
-                    .disabled(!preferences.captureCursor)
-                Toggle("Open the editor when a recording finishes", isOn: $preferences.openEditorAfterRecording)
-            }
-
-            Section("Captures") {
-                LabeledContent("Saved recordings") {
-                    Text("\(store.recordings.count)")
-                }
-                HStack {
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.open(store.directory)
-                    }
-                    Button("Clear Captures…", role: .destructive, action: onClearCaptures)
-                        .disabled(store.recordings.isEmpty)
-                }
-            }
-
-            Section("Permission") {
-                LabeledContent("Screen Recording") {
-                    Label(
-                        hasPermission ? "Allowed" : "Not allowed",
-                        systemImage: hasPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-                    )
-                    .foregroundStyle(hasPermission ? Color.green : Color.orange)
-                }
-                if !hasPermission {
-                    Text(
-                        "Turn on GIF Maker under Privacy & Security → Screen & System Audio Recording, then quit and reopen GIF Maker."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    Button("Open System Settings") { ScreenRecordingPermission.openSystemSettings() }
-                }
-            }
+        TabView(selection: $navigation.pane) {
+            pane { general }
+                .tabItem { Text("General") }
+                .tag(SettingsNavigation.Pane.general)
+            pane { UpdatesSection(preferences: preferences, updates: updates) }
+                .tabItem { Text(updates.availableUpdate == nil ? "Updates" : "Updates •") }
+                .tag(SettingsNavigation.Pane.updates)
         }
-        .formStyle(.grouped)
+        .padding(.top, 8)
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             hasPermission = ScreenRecorder.hasPermission
         }
+    }
+
+    private func pane(@ViewBuilder _ content: () -> some View) -> some View {
+        Form(content: content)
+            .formStyle(.grouped)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var general: some View {
+        Section("Recording") {
+            LabeledContent("Record shortcut") {
+                ShortcutRecorder(combo: $preferences.hotKey)
+                    .frame(width: 170, height: 24)
+            }
+            Text("Starts and stops recording from any app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Stop automatically after", selection: $preferences.maximumDuration) {
+                ForEach(Preferences.maximumDurationChoices, id: \.self) { seconds in
+                    Text(seconds < 60 ? "\(Int(seconds)) seconds" : "\(Int(seconds / 60)) min").tag(seconds)
+                }
+            }
+            Toggle("Capture cursor", isOn: $preferences.captureCursor)
+            Toggle("Highlight mouse clicks", isOn: $preferences.highlightClicks)
+                .disabled(!preferences.captureCursor)
+            Toggle("Open the editor when a recording finishes", isOn: $preferences.openEditorAfterRecording)
+        }
+
+        Section("Captures") {
+            LabeledContent("Saved recordings") {
+                Text("\(store.recordings.count)")
+            }
+            HStack {
+                Button("Show in Finder") {
+                    NSWorkspace.shared.open(store.directory)
+                }
+                Button("Clear Captures…", role: .destructive, action: onClearCaptures)
+                    .disabled(store.recordings.isEmpty)
+            }
+        }
+
+        Section("Permission") {
+            LabeledContent("Screen Recording") {
+                Label(
+                    hasPermission ? "Allowed" : "Not allowed",
+                    systemImage: hasPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(hasPermission ? Color.green : Color.orange)
+            }
+            if !hasPermission {
+                Text(
+                    "Turn on GIF Maker under Privacy & Security → Screen & System Audio Recording, then quit and reopen GIF Maker."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Button("Open System Settings") { ScreenRecordingPermission.openSystemSettings() }
+            }
+        }
+    }
+}
+
+/// The Updates part of Settings: where builds are published, and what's there.
+private struct UpdatesSection: View {
+    @ObservedObject var preferences: Preferences
+    @ObservedObject var updates: UpdateController
+
+    var body: some View {
+        Section("Updates") {
+            LabeledContent("Version") {
+                Text(updates.currentVersion?.description ?? "Development build")
+            }
+            LabeledContent("Update folder") {
+                Text(preferences.updateFolder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Not set")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(preferences.updateFolder?.path ?? "")
+            }
+            HStack {
+                Button("Choose…", action: chooseFolder)
+                Button("Show in Finder") {
+                    if let folder = preferences.updateFolder { NSWorkspace.shared.open(folder) }
+                }
+                .disabled(preferences.updateFolder == nil)
+            }
+            Text(
+                "The folder new builds are published to, such as one in iCloud Drive or Dropbox. GIF Maker installs what it finds there, so only use a folder you control."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            Toggle("Check for updates automatically", isOn: $preferences.automaticallyChecksForUpdates)
+
+            HStack {
+                Button("Check Now") { updates.checkNow() }
+                    .disabled(updates.isBusy || preferences.updateFolder == nil || !updates.canCheck)
+                if updates.availableUpdate != nil {
+                    Button("Install and Restart") { updates.installUpdate() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(updates.isBusy)
+                    Button("Show Disk Image") { updates.showDiskImage() }
+                }
+                if updates.isBusy {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if let statusText {
+                Text(statusText)
+                    .foregroundStyle(isProblem ? Color.orange : Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let notes = updates.availableUpdate?.manifest.notes {
+                Text(notes)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(6)
+            }
+            if let outcomeText {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(outcomeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if updates.lastOutcome == .failed {
+                        Spacer()
+                        Button("Show Log") { updates.showLog() }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            Text(signingNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var isProblem: Bool {
+        if case .failed = updates.status { return true }
+        return false
+    }
+
+    private var statusText: String? {
+        switch updates.status {
+        case .idle:
+            if !updates.canCheck { return "Updates work in the built app, not in a development build." }
+            return lastChecked
+        case .checking: return "Checking…"
+        case .upToDate: return ["GIF Maker is up to date.", lastChecked].compactMap { $0 }.joined(separator: " ")
+        case .available:
+            guard let update = updates.availableUpdate else { return nil }
+            return "Version \(update.version) is available."
+        case .unavailable(let reason): return reason
+        case .installing(let step): return step
+        case .failed(let reason): return reason
+        }
+    }
+
+    private var lastChecked: String? {
+        guard let date = preferences.lastUpdateCheck else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return "Last checked \(formatter.string(from: date).lowercasedFirstLetter)."
+    }
+
+    /// What happened to the update this launch followed, if it followed one.
+    private var outcomeText: String? {
+        switch updates.lastOutcome {
+        case .updated(let signatureChanged):
+            let version = updates.currentVersion.map { " to version \($0)" } ?? ""
+            return "GIF Maker was updated\(version)."
+                + (signatureChanged
+                    ? " It is signed differently from the version before, so Screen Recording has to be allowed again."
+                    : "")
+        case .failed:
+            return "The last update couldn't be installed, so the version you had was put back."
+        case nil:
+            return nil
+        }
+    }
+
+    /// macOS ties Screen Recording permission to the signature, and development
+    /// builds don't have the stable identity a Developer ID gives.
+    private var signingNote: String {
+        updates.isAdHocSigned
+            ? "This build is signed ad-hoc, so macOS will ask you to allow Screen Recording again after every update."
+            : "If an update is signed with a different certificate from this build, macOS will ask you to allow Screen Recording again."
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder new builds of GIF Maker are published to."
+        panel.directoryURL = preferences.updateFolder
+        if panel.runModal() == .OK, let url = panel.url {
+            preferences.updateFolder = url
+        }
+    }
+}
+
+extension String {
+    /// "Today at 10:02" → "today at 10:02", for use mid-sentence.
+    fileprivate var lowercasedFirstLetter: String {
+        prefix(1).lowercased() + dropFirst()
     }
 }
 
@@ -75,6 +254,22 @@ enum ScreenRecordingPermission {
     static func openSystemSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// After an update signed differently from the version before: macOS keeps
+    /// the old entry in its list, but it no longer matches the app.
+    @MainActor
+    static func showAlertAfterUpdate() {
+        let alert = NSAlert()
+        alert.messageText = "Allow Screen Recording again"
+        alert.informativeText =
+            "GIF Maker was updated, and the new version is signed differently, so macOS no longer applies its Screen Recording permission. In System Settings, under Privacy & Security → Screen & System Audio Recording, turn GIF Maker off and on again, then quit and reopen it."
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            openSystemSettings()
         }
     }
 

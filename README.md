@@ -40,6 +40,23 @@ Unless the release notes say it is notarized, macOS will refuse to open the app 
 
 The first time you record, macOS asks for **Screen Recording** permission. Allow GIF Maker under *System Settings → Privacy & Security → Screen & System Audio Recording*, then quit and reopen the app. Recent versions of macOS also ask you to re-confirm this from time to time for any app that records the screen.
 
+### Updates
+
+GIF Maker can update itself from a folder that new builds are published to — a folder on your Mac, or one that syncs between Macs such as iCloud Drive or Dropbox. It never contacts a server.
+
+1. Open *Settings → Updates* and choose the folder ([Making a release](#making-a-release) explains how builds get there).
+2. GIF Maker looks in the folder when it starts and about once a day after that, or when you click **Check Now**. Turn off *Check for updates automatically* to check only by hand.
+3. When a newer build is there, Settings and the menu bar menu say so. Click **Install and Restart**: GIF Maker checks the build, replaces itself and reopens. If the new version doesn't start, the one you had is put back.
+
+Things to know:
+
+- **Only use a folder you control.** These builds aren't signed with a Developer ID, so GIF Maker can't tell who made one. It checks that the disk image matches its published checksum, that the app inside is GIF Maker, that it is newer, and that its code signature is intact — and then installs it. Anyone who can write to the folder can therefore put software on your Mac.
+- **Screen Recording permission may need allowing again.** macOS ties the permission to the app's signature. An update signed with the same certificate as the version you have keeps it. An ad-hoc signed build never matches the one before, so after each update you have to turn GIF Maker off and on again under *Privacy & Security → Screen & System Audio Recording*. GIF Maker tells you when this applies.
+- A build that is still syncing is skipped until it has arrived completely.
+- GIF Maker won't restart to update while it is recording or exporting.
+- If GIF Maker can't replace itself where it is installed (for example, in a folder only an administrator can change), it shows you the disk image instead so you can drag the app across yourself. **Show Disk Image** does the same at any time.
+- What the last install did is logged in `~/Library/Logs/GIF Maker/Update.log`.
+
 ## Build from source
 
 ```sh
@@ -59,7 +76,7 @@ macOS ties the Screen Recording permission to the app's code signature. The buil
 3. Press it again to stop. The clip appears in the strip and opens in the editor.
 4. Trim, adjust the options, add captions, then **Save As…** or **Copy GIF**.
 
-The gear button holds the capture options (cursor, click highlights, exact size) and Settings, where you can change the shortcut and the recording limit.
+The gear button holds the capture options (cursor, click highlights, exact size) and Settings, where you can change the shortcut and the recording limit, and set up [updates](#updates).
 
 ## Use it from an AI agent (MCP)
 
@@ -95,7 +112,8 @@ The code is a Swift package with three targets:
   - `FramePlan` turns the edit settings (trim, frame rate, speed, loop type) into the exact list of frames to produce.
   - `Exporter` decodes those frames, scales them, draws captions, and feeds a GIF or MP4 writer. Reverse and ping-pong loops are decoded in chunks so memory stays bounded.
   - `GIFEncoder` is a streaming GIF encoder written for screen recordings: each frame gets its own palette, and only pixels that changed since the previous frame are stored.
-- **`GifMaker`** — the AppKit/SwiftUI app: the capture window, editor, settings, menus and global shortcut.
+  - `Updates` finds a newer build in the update folder: `ReleaseManifest` reads `latest.json`, `AppVersion` compares versions, `UpdateChecker` decides whether a build is newer and completely there, and `UpdateInstallPlan` holds the script that swaps the installed app for the new one and puts it back if that fails.
+- **`GifMaker`** — the AppKit/SwiftUI app: the capture window, editor, settings, menus and global shortcut. Its `UpdateInstaller` verifies a published build and stages it beside the installed app before the swap.
 - **`GifMakerMCP`** — the `gifmaker-mcp` server described above, built on `GifMakerCore`.
 
 Recordings and their edit settings are stored in `~/Library/Application Support/GIF Maker/Captures`.
@@ -104,7 +122,7 @@ Recordings and their edit settings are stored in `~/Library/Application Support/
 
 ```sh
 swift build   # debug build
-swift test    # unit tests for the encoder, frame planning, export and capture geometry
+swift test    # unit tests for the encoder, frame planning, export, capture geometry and updates
 ```
 
 Debug builds include a small automation hook for driving the app from a script (see `Sources/GifMaker/Automation.swift`); it is compiled out of release builds.
@@ -125,6 +143,37 @@ NOTARY_PROFILE=gifmaker scripts/make-dmg.sh   # signs with Developer ID, notariz
 ```
 
 The script picks a Developer ID certificate over a development one automatically. Without one it still signs the image, but downloaders have to allow the app in System Settings as described under [Install](#install).
+
+### Publishing an update
+
+To make a release show up in the app's [updater](#updates), publish it to a folder:
+
+```sh
+VERSION=1.2.0 PUBLISH_DIR="$HOME/path/to/update-folder" scripts/make-dmg.sh
+```
+
+This copies the disk image into the folder and then writes `latest.json` beside it:
+
+```json
+{
+  "build" : 14,
+  "file" : "GIF-Maker-1.2.0.dmg",
+  "sha256" : "…",
+  "size" : 4123456,
+  "version" : "1.2.0"
+}
+```
+
+Set `RELEASE_NOTES` to add a `notes` entry, which Settings shows beside the update. The folder has to exist already; older disk images in it are left alone and can be deleted.
+
+Copies of the app that are pointed at that folder (or at a folder that syncs with it) offer the build once it is newer than what they are running: a higher `VERSION`, or the same version with a higher build number. The build number is the number of commits, so commit before publishing — rebuilding the same commit with the same `VERSION` isn't seen as an update.
+
+The manifest is written last so that the folder never advertises an image that isn't there yet. The app also checks the image's size and checksum before offering it, because a sync service may deliver the two files in either order.
+
+Two things follow from these builds not being signed with a Developer ID:
+
+- The updater has no way to check who made a build. Whoever can write to the folder can ship code to every copy of the app that reads it, so keep the folder private.
+- Sign with the same certificate every time and the Screen Recording permission carries across updates. An *Apple Development* certificate is picked up by the build script on its own; a self-signed code-signing certificate works too if you name it in `CODESIGN_IDENTITY`. With an ad-hoc signature the permission has to be allowed again after every update.
 
 ## Not included
 
